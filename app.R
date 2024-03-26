@@ -1,297 +1,192 @@
-library(shinydashboard)
-library(plotly)
-library(leaflet)
-library(DT)
-library(ggplot2)
-library(readr) # If needed for reading data
-library(dplyr)
-library(rgl) # For 3D plots
-library(shinythemes)
-library(shinyWidgets)
-library(leaflet.extras) 
-library(shinyjs) 
-library(beepr)
-library(httr)
-library(jsonlite)
+library(shiny)
+library(ggmap)
+library(gganimate) 
+library(gifski)
+library(data.table) 
+library(forecast)
 
-# Function for calculating fire spread rate
-rothermel_model <- function(IR, phi_w, phi_s, rho_b, epsilon, Q_ig) {
-  (IR * (1 + phi_w + phi_s)) / (rho_b * epsilon * Q_ig)
-}
-
-# Assuming 'df' is loaded here (update path as necessary)
-df <- read_csv("data/Brazilian-fire-dataset.csv")
-
-
-# UI definition
-ui <- dashboardPage( 
-   
-  dashboardHeader(title = "Combined App"),
-  dashboardSidebar(
-    sidebarMenu(
-      menuItem("Fire spread rate", tabName = "dashboard", icon = icon("fire")),
-      menuItem("Parameters", icon = icon("sliders"),
-               sliderInput("IR", "Reaction Intensity", min = 0, max = 10000, value = 2000),
-               sliderInput("phi_w", "Wind Factor", min = 0, max = 1, value = 0.4),
-               sliderInput("phi_s", "Slope Factor", min = 0, max = 1, value = 0.3),
-               sliderInput("rho_b", "Bulk Density", min = 0, max = 100, value = 40),
-               sliderInput("epsilon", "Effective Heating Number", min = 0, max = 1, step = 0.01, value = 0.01),
-               sliderInput("Q_ig", "Heat of Pre-Ignition", min = 0, max = 10000, value = 2500)
-      ),
-      menuItem("Choropleth Map", tabName = "choroplethMap", icon = icon("globe")),
-      menuItem("Forest Fire Analysis", tabName = "forestFireAnalysis", icon = icon("tree")), 
-      menuItem("Real-time Data", tabName = "realtimeData", icon = icon("satellite-dish"))
-      
-    )
+# Define the user interface for the app
+ui <- fluidPage(
+  tags$head(
+    tags$style(HTML("
+            body {
+              background: url('merge/fire1.jpg') no-repeat center center fixed;
+              background-size: cover; /* Cover the entire page */
+              font-family: 'Arial', sans-serif;
+            }
+            .navbar, .sidebar .well {
+              background-color: #ffffff;
+              border-radius: 0;
+            }
+            .navbar {
+              box-shadow: 0 4px 8px 0 rgba(0,0,0,0.2);
+              margin-bottom: 20px;
+            }
+            .navbar-default .navbar-brand {
+              color: #337ab7;
+              font-size: 24px;
+              font-weight: bold;
+              margin-left: 20px;
+            }
+            .navbar-default {
+              border-color: #fff;
+              background-color: #fff;
+            }
+            .btn-action {
+              background-color: #4CAF50;
+              border-color: #4CAF50;
+              color: #ffffff;
+            }
+            .btn-action:hover {
+              background-color: #45a049;
+              border-color: #45a049;
+            }
+            .well {
+              box-shadow: none;
+              border: 1px solid #ddd;
+            }
+            #fireGIF_container {
+              border: 2px solid #337ab7;
+              background-color: #ffffff;
+              padding: 10px;
+              box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+            }
+            .control-label {
+              font-weight: bold;
+            }
+            .sidebar .form-group {
+              background-color: #e9ecef; /* Add a light gray background */
+              padding: 8px 10px;
+              border-radius: 4px;
+              margin-bottom: 10px; /* Add some space at the bottom */
+            }
+            .sidebar .btn {
+              width: 100%;
+              margin-top: 10px;
+            }
+            /* Additional styling for the date inputs */
+            .sidebar .shiny-date-input {
+              background-color: #f7f7f7; /* Lighter grey background for date inputs */
+              border: 3px solid #cccccc; /* Slightly darker border for the date inputs */
+              border-radius: 4px; /* Rounded borders for the date inputs */
+              padding: 4px; /* Padding inside the date input boxes */
+            }
+        ")),
+    tags$link(rel="stylesheet", type="text/css", href="bootstrap.min.css")
   ),
-  dashboardBody( 
-    useShinyjs(),
-    tabItems(
-      tabItem(tabName = "dashboard",
-              fluidRow(
-                box(title = "Control Panel", status = "primary", solidHeader = TRUE, width = 12,
-                    actionButton("startBtn", "Start", icon = icon("play"), class = "btn-success"),
-                    actionButton("stopBtn", "Stop", icon = icon("stop"), class = "btn-danger"),
-                    textOutput("spreadRateOutput")
-                )
-              ),
-              fluidRow(
-                box(title = "Factor Influence on Spread Rate", status = "info", solidHeader = TRUE, width = 6,
-                    plotlyOutput("factorPlot")
-                ),
-                box(title = "Fire Spread Visualization", status = "warning", solidHeader = TRUE, width = 6,
-                    rglwidgetOutput("plot3D")
-                )
-              )
-      ),
-      tabItem(tabName = "choroplethMap",
-              h2("Interactive Choropleth Map"),
-              
-              mainPanel(leafletOutput("map"))
-      ), 
+  
+  # App title in the navbar
+  tags$nav(class="navbar navbar-default",
+           tags$div(class="container-fluid",
+                    tags$div(class="navbar-header",
+                             tags$a(class="navbar-brand", href="#", "Active Fire Maps with R")
+                    )
+           )
+  ),
+  
+  sidebarLayout(
+    sidebarPanel(
+      # Input: Specify start and end date
+      dateInput("start_date", "Start Date:", value = Sys.Date() - 10),
+      dateInput("end_date", "End Date:", value = Sys.Date()),
+      # Input: Button to generate map
+      actionButton("goButton", "Generate Map", class = "btn-action"),
+      # Add this inside your sidebarLayout's sidebarPanel in the ui object
+      downloadButton("downloadData", "Download Data", class = "btn-action")
       
-      tabItem(tabName = "forestFireAnalysis",
-              h2("Forest Fire Analysis"),
-              selectInput("selectedState", "Select State:", choices = unique(df$State)),
-              selectInput("selectedYear", "Select Year:", choices = unique(df$Year)),
-              tabsetPanel(
-                tabPanel("Trend Analysis", plotlyOutput("trendPlot")),
-                tabPanel("Data Table", DT::dataTableOutput("fireTable"))
-              )
+    ),
+    mainPanel( 
+      textOutput("totalFires"),
+      # Output: Display the generated fire map GIF inside a container with blue border
+      tags$div(id = "fireGIF_container",
+               imageOutput("fireGIF", height = "auto") # Set auto height for responsive GIF display
       )
-    ), 
-    tabItem(tabName = "realtimeData",
-            h2("Real-time Fire Data"),
-            leafletOutput("realtimeMap")
     )
-    
-    )
-    
   )
+)
 
-
-
-# Server logic
 server <- function(input, output, session) {
-  running <- reactiveVal(FALSE)
+  # Reactive value to store the fire data
+  fire_data <- reactiveVal()
   
-  observeEvent(input$startBtn, { running(TRUE) })
-  observeEvent(input$stopBtn, { running(FALSE) })
+  # Function to fetch fire data
+  get_fire_data <- function(main_url, map_key, source, area, start_date, end_date) {
+    day_range <- as.integer(as.Date(end_date) - as.Date(start_date)) + 1
+    url <- paste0(main_url, "/", map_key, "/", source, "/", area, "/", day_range, "/", start_date)
+    return(fread(url))
+  }
   
-  spreadRate <- reactive({
-    if(running()) {
-      rothermel_model(input$IR, input$phi_w, input$phi_s, input$rho_b, input$epsilon, input$Q_ig)
-    } else {
-      NULL
+  # Observe the click of the 'Generate Map' button
+  observeEvent(input$goButton, {
+    if (difftime(input$end_date, input$start_date, units = "days") > 10) {
+      showModal(modalDialog(
+        title = "Error",
+        "The date range should not exceed 10 days.",
+        easyClose = TRUE,
+        footer = NULL
+      ))
+      return()
     }
-  })
-  
-  output$spreadRateOutput <- renderText({
-    rate <- spreadRate()
-    if (!is.null(rate)) {
-      paste("Spread Rate:", round(rate, 2), "units")
-    } else {
-      "Spread Rate: Not running"
-    }
-  })
-  
-  output$plot3D <- renderRglwidget({
-    rate <- spreadRate()
-    if (!is.null(rate)) {
-      clear3d()
-      x <- seq(-10, 10, length.out = 100)
-      y <- seq(-10, 10, length.out = 100)
-      z <- outer(x, y, function(x, y) { rate * exp(-0.1*(x^2 + y^2)) })
-      surface3d(x, y, z, color = rainbow(10000))
-      rglwidget()
-    }
-  })
-  
-  output$factorPlot <- renderPlotly({
-    rate <- spreadRate()
-    if (!is.null(rate)) {
-      data <- data.frame(
-        FactorValue = c(input$IR, input$phi_w * 100, input$phi_s * 100),
-        SpreadRate = rep(rate, 3),
-        FactorType = c("Reaction Intensity", "Wind Factor", "Slope Factor")
-      )
-      plot_ly(data, x = ~FactorValue, y = ~SpreadRate, type = 'scatter', mode = 'markers',
-              marker = list(size = 10), color = ~FactorType, colors = "Set1") %>%
-        layout(title = "Factors Influencing Spread Rate",
-               xaxis = list(title = "Factor Value"),
-               yaxis = list(title = "Spread Rate"))
-    }
-  })
-  
-  # Update the heatmap based on running status and spread rate changes
-  spreadRate <- reactive({
-    if(running()) {
-      rothermel_model(input$IR, input$phi_w, input$phi_s, input$rho_b, input$epsilon, input$Q_ig)
-    } else {
-      0  # Default to 0 if not running
-    }
+    
+    # Fetch the data from the API and store it in 'fire_data'
+    fire_data(get_fire_data(
+      main_url = "https://firms.modaps.eosdis.nasa.gov/api/area/csv",
+      map_key = "0ca7e809b22eafa273116a3832ce032d", # Replace with your actual map key
+      source = "VIIRS_SNPP_NRT",
+      area = "world",
+      start_date = format(input$start_date, "%Y-%m-%d"),
+      end_date = format(input$end_date, "%Y-%m-%d")
+    ))
   }) 
-  output$map <- renderLeaflet({
-    req(spreadRate())  # ensure that spreadRate is available
-    
-    # Simulate the 'df' with 'lat' and 'long' columns
-    df_simulated <- data.frame(
-      lat = runif(100, -23.5, -22.9),  # random latitudes in a plausible range
-      long = runif(100, -46.6, -46.4),  # random longitudes in a plausible range
-      intensity = runif(100, min = 0, max = spreadRate())  # intensity based on spread rate
-    )
-    
-    # Create a leaflet map with a black tile layer
-    leaflet(df_simulated) %>%
-      addTiles(urlTemplate = "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png",
-               options = tileOptions(minZoom = 1, maxZoom = 18, attribution = "")) %>%
-      addHeatmap(
-        lng = ~long, lat = ~lat, intensity = ~intensity,
-        blur = 20, max = 1, radius = 15,
-        gradient = c(low = "yellow", high = "red")  # color gradient from low to high intensity
-      )
-  }) 
-  high_spread_rate_threshold <- 20  # Adjust this threshold as needed
-  
-  # Observe the spread rate and trigger an alarm if necessary
-  observe({
-    spread_rate_value <- spreadRate() # Function to get the current spread rate
-    if(!is.null(spread_rate_value) && spread_rate_value > high_spread_rate_threshold) {
-      # Use shinyjs to run custom JavaScript for sound
-      beep(sound = "shotgun")
-      
-      # Show a danger message using Shiny's built-in notification system
-      showNotification("Danger! High spread rate detected.", type = "error")
-    }
+  output$totalFires <- renderText({
+    paste("Total number of fires detected:", nrow(fire_data()))
   })
   
-  
-  # Update select inputs for forest fire analysis
-  df <- read_csv("data/Brazilian-fire-dataset.csv")
-  
-  # Update the choices for the select input for Year based on the selected State
-  # Update the choices for the select input for Year based on the selected State
-  observeEvent(input$selectedState, {
-    state_specific_years <- unique(df$Year[df$State == input$selectedState])
-    updateSelectInput(session, "selectedYear", choices = state_specific_years)
-  }, ignoreNULL = FALSE)
-  
-  # Trend Plot
-  output$trendPlot <- renderPlotly({
-    req(input$selectedState, input$selectedYear)  # Require that these inputs are not NULL
+  # Render the GIF image
+  output$fireGIF <- renderImage({
+    req(fire_data())
     
-    filtered_df <- df %>%
-      filter(State == input$selectedState, Year == as.numeric(input$selectedYear)) %>%
-      mutate(Month = factor(Month, levels = c("January", "February", "March", "April", "May", "June", 
-                                              "July", "August", "September", "October", "November", "December")))
+    data <- fire_data()
     
-    p <- ggplot(filtered_df, aes(x = Month, y = `Number of Fires`, group = 1)) +
-      geom_line(color = "steelblue") +
-      geom_point(color = "darkorange", size = 3) +
+    if (nrow(data) == 0) {
+      stop("No fire data available for this date range.")
+    }
+    
+    # Convert temperatures from Kelvin to Celsius
+    data$temperature <- data$bright_ti5 - 273.15
+    
+    # Define the file name for the GIF
+    gif_file <- tempfile(fileext = ".gif")
+    data$acq_date <- as.Date(data$acq_date, format = "%Y-%m-%d")
+    
+    # Create a ggplot object with fire data
+    p <- ggplot(data, aes(x = longitude, y = latitude, color = temperature)) +
+      geom_point() +
+      scale_color_gradient(low = "yellow", high = "red") +
+      labs(title = "Active Fires", x = "Longitude", y = "Latitude") +
       theme_minimal() +
-      labs(title = paste("Fire Trends in", input$selectedState, input$selectedYear),
-           x = "Month", y = "Number of Fires") +
-      scale_x_discrete(limits = levels(filtered_df$Month)) # Ensure months are in order
+      transition_time(acq_date) +
+      labs(subtitle = 'Date: {format(frame_time, "%Y-%m-%d")}')
     
-    # Convert to plotly object
-    ggplotly(p) %>%
-      layout(hovermode = 'closest')  # Enable hover for the closest data point
-  })
-  
-  
-  # Data Table
-  output$fireTable <- DT::renderDataTable({
-    req(input$selectedState)  # Require that this input is not NULL
     
-    # Filter 'df' for the selected state and render it
-    df %>% filter(State == input$selectedState)
-  })
-} 
-observe({
-  # This can be triggered by an input or run when the app is launched
-  api_data <- reactiveVal()
+    # Animate the ggplot object and save as GIF
+    anim <- animate(p, nframes = 100, fps = 10, width = 800, height = 600, renderer = gifski_renderer())
+    anim_save(gif_file, animation = anim)
+    
+    # Return the path to the generated GIF for rendering in UI
+    list(src = gif_file, contentType = "image/gif", alt = "Fire Map Animation")
+  }, deleteFile = TRUE)
   
-  # Call the API at regular intervals
-  autoInvalidate <- reactiveTimer(60000) # to call API every 60 seconds
-  
-  observe({
-    autoInvalidate() # This reactive expression is invalidated every 60 seconds
-    # API call, update api_data
-    res <- httr::GET("https://api.example.com/data")
-    # Error handling for the API call
-    if(httr::status_code(res) == 200) {
-      api_content <- httr::content(res, as = "text", encoding = "UTF-8")
-      # Assuming the API returns JSON
-      api_json <- jsonlite::fromJSON(api_content)
-      api_data(api_json)
-    } else {
-      # Error handling here
-      api_data(NULL)
+  # Download handler to allow users to download the data as a CSV
+  output$downloadData <- downloadHandler(
+    filename = function() {
+      paste("nasa_fire_data-", Sys.Date(), ".csv", sep = "")
+    },
+    content = function(file) {
+      write.csv(fire_data(), file, row.names = FALSE)
     }
-  })
-  
-  output$apiDataDisplay <- renderUI({
-    # Render the API data in the UI, could be a table or a plot
-    # Check if api_data() is not NULL and then proceed
-    api_dat <- api_data()
-    if(!is.null(api_dat)) {
-      # Convert the data to a dataframe or a format suitable for rendering in the UI
-      # Return a UI element such as a plot or table created with the data
-    }
-  })
-}) 
-# This observe block could be used to periodically call an API
-library(httr)
-library(jsonlite)
-library(leaflet)
-
-# Example placeholder for the FIRMS API URL, adjust according to the actual API documentation
-api_url <- paste0("https://firms.modaps.eosdis.nasa.gov/api/endpoint?api_key=", "0ca7e809b22eafa273116a3832ce032d")
-
-# Function to fetch data
-fetchData <- function() {
-  response <- GET(api_url)
-  if(status_code(response) == 200) {
-    content <- content(response, "text")
-    data <- fromJSON(content)
-    return(data)
-  } else {
-    return(NULL)
-  }
+  )
 }
-
-# In your Shiny server function, call this fetchData() function periodically
-output$realtimeMap <- renderLeaflet({
-  data <- fetchData()
-  if(!is.null(data)) {
-    # Assuming 'data' contains latitude and longitude
-    leaflet() %>% 
-      addTiles() %>%
-      addMarkers(lng = data$longitude, lat = data$latitude)
-  }
-})
-
-
-
 
 shinyApp(ui, server)
+
