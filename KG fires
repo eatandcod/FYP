@@ -1,0 +1,185 @@
+library(shiny)
+library(ggplot2)
+library(gganimate)
+library(gifski)
+library(data.table)
+library(forecast)
+library(dplyr)
+
+# UI Definition
+ui <- fluidPage(
+  tags$head(
+    tags$style(HTML("
+      body {
+        background: url('merge/fire1.jpg') no-repeat center center fixed;
+        background-size: cover;
+        font-family: 'Arial', sans-serif;
+      }
+      .navbar, .sidebar .well {
+        background-color: #ffffff;
+        border-radius: 0;
+      }
+      .navbar {
+        box-shadow: 0 4px 8px 0 rgba(0,0,0,0.2);
+      }
+      .navbar-header {
+        text-align: center;
+        width: 100%;
+      }
+      .navbar-default .navbar-brand {
+        color: #337ab7;
+        font-size: 24px;
+        font-weight: bold;
+        display: inline-block;
+        margin: 0 auto;
+      }
+      .btn-action {
+        background-color: #4CAF50;
+        border-color: #4CAF50;
+        color: #ffffff;
+        margin-bottom: 10px; /* Add space below button */
+      }
+      .btn-action:hover {
+        background-color: #45a049;
+        border-color: #45a049;
+      }
+      .well {
+        box-shadow: none;
+        border: 1px solid #ddd;
+      }
+      #fireGIF_container {
+        border: 2px solid #337ab7;
+        background-color: #ffffff;
+        padding: 10px;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+      }
+      .sidebar .form-group {
+        background-color: #e9ecef;
+        padding: 8px 10px;
+        border-radius: 4px;
+        margin-bottom: 10px;
+      }
+      .sidebar .btn {
+        width: 100%;
+        margin-top: 10px;
+      }
+      .sidebar .shiny-date-input {
+        background-color: #f7f7f7;
+        border: 3px solid #cccccc;
+        border-radius: 4px;
+        padding: 4px;
+      }
+    ")),
+    tags$link(rel="stylesheet", type="text/css", href="bootstrap.min.css")
+  ),
+  
+  tags$nav(class="navbar navbar-default",
+           tags$div(class="container-fluid",
+                    tags$div(class="navbar-header",
+                             tags$a(class="navbar-brand", href="#", "Active Fire Maps with R")
+                    )
+           )
+  ),
+  
+  sidebarLayout(
+    sidebarPanel(
+      dateInput("start_date", "Start Date:", value = Sys.Date() - 10),
+      dateInput("end_date", "End Date:", value = Sys.Date()),
+      actionButton("goButton", "Generate Map", class = "btn-action"),
+      br(),  # Adds a line break for space
+      downloadButton("downloadData", "Download Data", class = "btn-action")
+    ),
+    mainPanel( 
+      textOutput("totalFires"),
+      plotOutput("fireForecast"),
+      tags$div(id = "fireGIF_container",
+               imageOutput("fireGIF", height = "auto")
+      )
+    )
+  )
+)
+
+# Server Logic
+server <- function(input, output, session) {
+  # Load the CSV data at startup
+  initial_fire_data <- read.csv("C:/Users/azra.nisar/Downloads/viirs-snpp_2021_Kyrgyzstan.csv")
+  
+  # Convert dates in the data to Date type
+  initial_fire_data$acq_date <- as.Date(initial_fire_data$acq_date) 
+  fire_data$acq_date <- as.Date(fire_data$acq_date, format = "%Y-%m-%d")
+  
+  # Remove rows where acq_date is NA
+  fire_data <- na.omit(fire_data)
+  
+  # Reactive expression to filter the fire data based on input dates
+  fire_data <- reactive({
+    req(input$start_date, input$end_date)
+    filtered_data <- initial_fire_data %>%
+      filter(acq_date >= as.Date(input$start_date) & acq_date <= as.Date(input$end_date))
+    return(filtered_data)
+  })
+  
+  output$totalFires <- renderText({
+    paste("Total number of fires detected:", nrow(fire_data()))
+  })
+  
+  output$fireForecast <- renderPlot({
+    req(fire_data())
+    daily_fire_count <- aggregate(fire_data()[, "acq_date"], by=list(Date=fire_data()$acq_date), FUN=length)
+    colnames(daily_fire_count) <- c("Date", "Count")
+    
+    # Convert to a ts object assuming daily data
+    fire_ts <- ts(daily_fire_count$Count, frequency=365)
+    
+    # Fit an ARIMA model
+    fit <- auto.arima(fire_ts)
+    
+    # Forecast the next period
+    future <- forecast(fit, h=30)
+    
+    # Plot the forecast
+    plot(future)
+  })
+  
+  output$fireGIF <- renderImage({
+    req(fire_data())
+    
+    data <- fire_data()
+    
+    if (nrow(data) == 0) {
+      stop("No fire data available for this date range.")
+    }
+    
+    # Define the file name for the GIF
+    gif_file <- tempfile(fileext = ".gif")
+    
+    # Create a ggplot object with fire data
+    p <- ggplot(data, aes(x = longitude, y = latitude)) +
+      geom_point(aes(color = bright_ti5)) +  # Assuming bright_ti5 column exists and is used for temperature
+      scale_color_gradient(low = "yellow", high = "red") +
+      labs(title = "Active Fires", x = "Longitude", y = "Latitude") +
+      theme_minimal() +
+      transition_time(acq_date) +
+      labs(subtitle = 'Date: {format(frame_time, "%Y-%m-%d")}')
+    
+    # Animate the ggplot object and save as GIF
+    anim <- animate(p, nframes = 100, fps = 10, width = 800, height = 600, renderer = gifski_renderer())
+    anim_save(gif_file, animation = anim)
+    
+    # Return the path to the generated GIF for rendering in UI
+    list(src = gif_file, contentType = "image/gif", alt = "Fire Map Animation")
+  }, deleteFile = TRUE)
+  
+  output$downloadData <- downloadHandler(
+    filename = function() {
+      paste("nasa_fire_data-", Sys.Date(), ".csv", sep = "")
+    },
+    content = function(file) {
+      write.csv(fire_data(), file, row.names = FALSE)
+    }
+  )
+}
+
+# Run the application
+shinyApp(ui, server)
+
