@@ -1,0 +1,146 @@
+import os
+
+import numpy as np
+
+from PIL import Image
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import Conv2D, MaxPooling2D, Flatten, Dense, BatchNormalization, Dropout
+
+# Re-initialising the CNN with some modifications
+CNN_Classifier = Sequential()
+
+# First Convolutional Block
+CNN_Classifier.add(Conv2D(32, (3, 3), input_shape=(64, 64, 3), activation='relu'))
+CNN_Classifier.add(BatchNormalization())
+CNN_Classifier.add(MaxPooling2D(pool_size=(2, 2)))
+CNN_Classifier.add(Dropout(0.3))  # Slightly increased dropout
+
+# Adding another Convolutional Block
+CNN_Classifier.add(Conv2D(128, (3, 3), activation='relu'))
+CNN_Classifier.add(BatchNormalization())
+CNN_Classifier.add(MaxPooling2D(pool_size=(2, 2)))
+CNN_Classifier.add(Dropout(0.4))
+
+# Adjusted Dense Layer
+CNN_Classifier.add(Dense(256, activation='relu'))
+CNN_Classifier.add(Dropout(0.5))
+
+
+
+
+# Flattening
+CNN_Classifier.add(Flatten())
+
+
+
+# Optional: Additional Dense Layer (Consider testing with and without this layer)
+# CNN_Classifier.add(Dense(64, activation='relu'))
+# CNN_Classifier.add(Dropout(0.5))
+
+# Output Layer
+CNN_Classifier.add(Dense(1, activation='sigmoid'))
+
+# Compiling the CNN
+CNN_Classifier.compile(optimizer='adam', loss='binary_crossentropy', metrics=['accuracy'])
+
+
+
+
+from tensorflow.keras.preprocessing.image import ImageDataGenerator
+
+
+def load_image(img_path, target_size=(64, 64)):
+    try:
+        img = Image.open(img_path)
+        img = img.resize(target_size)  # Resize to a standard size
+        return img
+    except Exception as e:
+        print(f"Error loading image at {img_path}: {str(e)}")
+        return None
+
+
+# Specify the path to your dataset
+dataset_path = 'wildfire/training'
+
+# Create an ImageDataGenerator
+datagen = ImageDataGenerator(rescale=1. / 255)
+
+# Create a generator for reading images
+generator = datagen.flow_from_directory(
+    dataset_path,
+    target_size=(64, 64),
+    batch_size=32,
+    class_mode='binary',
+    shuffle=False  # Set shuffle to False to maintain order
+)
+
+# Loop through the generator and print the paths of the images
+for i in range(len(generator.filenames)):
+    img_path = os.path.join(dataset_path, generator.filenames[i])
+    load_image(img_path)
+
+train_datagen = ImageDataGenerator(rescale=1. / 255,
+                                   shear_range=0.2,
+                                   zoom_range=0.2,
+                                   horizontal_flip=True)
+
+test_datagen = ImageDataGenerator(rescale=1. / 255)
+
+training_set = train_datagen.flow_from_directory('wildfire/training',
+                                                 target_size=(64, 64),
+                                                 batch_size=32,
+                                                 class_mode='binary')
+
+test_set = test_datagen.flow_from_directory('wildfire/testing',
+                                            target_size=(64, 64),
+                                            batch_size=32,
+                                            class_mode='binary')
+
+CNN_Classifier.fit_generator(training_set,
+                             steps_per_epoch=20,
+                             epochs=10,
+                             validation_data=test_set,
+                             validation_steps=50)
+
+from tensorflow.keras.preprocessing import image
+
+test_image = image.load_img('wildfire/validation/no fire/06498.jpg', target_size=(64, 64))
+test_image.show()
+test_image = image.img_to_array(test_image)
+test_image = np.expand_dims(test_image, axis=0)
+results = CNN_Classifier.predict(test_image)
+
+
+
+
+training_set.class_indices
+if results[0][0] == 0:
+    prediction = 'fire'
+    print(prediction)
+else:
+    prediction = 'no fire'
+    print(prediction)
+
+CNN_Classifier.save('CNN_Final.h5')
+
+
+from sklearn.metrics import classification_report, confusion_matrix
+
+# Predict on the test set
+y_pred = CNN_Classifier.predict_generator(test_set)
+
+# Convert probabilities to binary predictions (0 or 1)
+y_pred_binary = (y_pred > 0.5).astype(int)
+
+# Get true labels
+y_true = test_set.classes
+
+# Generate and print the confusion matrix
+conf_matrix = confusion_matrix(y_true, y_pred_binary)
+print("Confusion Matrix:")
+print(conf_matrix)
+
+# Generate and print the classification report
+class_report = classification_report(y_true, y_pred_binary, target_names=['fire', 'no fire'])
+print("Classification Report:")
+print(class_report)
