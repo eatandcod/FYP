@@ -1,0 +1,98 @@
+import os
+import numpy as np
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.metrics import classification_report, accuracy_score
+from PIL import Image
+
+
+# Function to load and preprocess images
+def load_images(folder):
+    images = []
+    labels = []  # 1 for fire, 0 for no fire
+
+    for label in ["fire", "no fire"]:
+        path = os.path.join(folder, label)
+        for file in os.listdir(path):
+            try:
+                img = Image.open(os.path.join(path, file))
+                img = img.resize((64, 64))  # Resize to 64x64
+                img = np.array(img)
+                if img.shape == (64, 64, 3):  # Check if image is not corrupted
+                    images.append(img.flatten())  # Flatten image to 1D array
+                    labels.append(1 if label == "fire" else 0)
+            except Exception as e:
+                print(e)
+
+    return np.array(images), np.array(labels)
+
+
+# Loading datasets
+X_train, y_train = load_images('wildfire/training')
+X_val, y_val = load_images('wildfire/validation')
+X_test, y_test = load_images('wildfire/testing')
+
+# Training the Random Forest model
+clf = RandomForestClassifier(n_estimators=100)
+clf.fit(X_train, y_train)
+
+# Evaluating the model
+# Validation
+val_predictions = clf.predict(X_val)
+print("Validation Accuracy:", accuracy_score(y_val, val_predictions))
+
+# Testing
+test_predictions = clf.predict(X_test)
+print("Testing Accuracy:", accuracy_score(y_test, test_predictions))
+print(classification_report(y_test, test_predictions))
+import numpy as np
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.metrics import classification_report, accuracy_score, confusion_matrix, ConfusionMatrixDisplay
+import matplotlib.pyplot as plt
+from PIL import Image
+import os
+import joblib
+
+# ... (Your existing code to load images and train the model) ...
+
+# After training the model and making predictions:
+cm = confusion_matrix(y_test, test_predictions)
+disp = ConfusionMatrixDisplay(confusion_matrix=cm)
+
+# Plot and save the confusion matrix as an image
+plt.figure(figsize=(8, 6))
+disp.plot(cmap=plt.cm.Blues)
+plt.tight_layout()
+plt.title('Confusion Matrix')
+plt.savefig('confusion_matrix.png')
+plt.close()
+
+print("Confusion matrix saved as confusion_matrix.png")
+
+
+# Calculate RMSE, MAPE, and MAE
+def calculate_metrics(y_true, y_pred):
+    rmse = np.sqrt(np.mean((y_true - y_pred) ** 2))
+
+    # Exclude zero values to avoid division by zero in MAPE calculation
+    non_zero_indices = y_true != 0
+    y_true_non_zero = y_true[non_zero_indices]
+    y_pred_non_zero = y_pred[non_zero_indices]
+
+    mape = np.mean(np.abs((y_true_non_zero - y_pred_non_zero) / y_true_non_zero)) * 100
+    mae = np.mean(np.abs(y_true - y_pred))
+    return rmse, mape, mae
+
+
+# Calculate metrics for test set
+rmse, mape, mae = calculate_metrics(y_test, test_predictions)
+
+# Print metrics
+print("Root Mean Squared Error (RMSE):", rmse)
+print("Mean Absolute Percentage Error (MAPE):", mape)
+print("Mean Absolute Error (MAE):", mae)
+
+# Optionally, save the model
+import joblib
+
+# Save the model
+joblib.dump(clf, 'wildfire_random_forest_model.pkl')
